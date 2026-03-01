@@ -112,31 +112,62 @@ final class SRTReceiver {
         srt_setsockflag(s, SRTO_RCVBUF, &rcvbuf,
                          Int32(MemoryLayout<Int32>.size))
 
-        // Build target address
-        var addr = sockaddr_in()
-        addr.sin_family = sa_family_t(AF_INET)
-        addr.sin_port = DB_DEFAULT_VIDEO_PORT.bigEndian
-        let ip = targetHost
-        guard inet_pton(AF_INET, ip, &addr.sin_addr) == 1 else {
-            log("ERROR: invalid IP address '\(ip)'")
-            srt_close(s)
-            return false
+        // Strip zone ID suffix (e.g. "2401:...%en0" → "2401:...")
+        let rawIP = targetHost
+        let cleanIP: String
+        if let pct = rawIP.firstIndex(of: "%") {
+            cleanIP = String(rawIP[rawIP.startIndex..<pct])
+        } else {
+            cleanIP = rawIP
         }
 
-        // Connect
-        let result = withUnsafePointer(to: &addr) { addrPtr in
-            addrPtr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
-                srt_connect(s, sa, Int32(MemoryLayout<sockaddr_in>.size))
+        let result: Int32
+        if cleanIP.contains(":") {
+            // ── IPv6 path ──────────────────────────────────────────────────
+            var addr = sockaddr_in6()
+            addr.sin6_family = sa_family_t(AF_INET6)
+            addr.sin6_port = DB_DEFAULT_VIDEO_PORT.bigEndian
+            guard inet_pton(AF_INET6, cleanIP, &addr.sin6_addr) == 1 else {
+                log("ERROR: invalid IPv6 address '\(cleanIP)'")
+                srt_close(s)
+                return false
             }
-        }
-        guard result != SRT_ERROR else {
-            log("connect to \(ip):\(DB_DEFAULT_VIDEO_PORT) failed: \(srtError())")
-            srt_close(s)
-            return false
+            result = withUnsafePointer(to: &addr) { addrPtr in
+                addrPtr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
+                    srt_connect(s, sa, Int32(MemoryLayout<sockaddr_in6>.size))
+                }
+            }
+            guard result != SRT_ERROR else {
+                log("connect to [\(cleanIP)]:\(DB_DEFAULT_VIDEO_PORT) failed: \(srtError())")
+                srt_close(s)
+                return false
+            }
+            sock = s
+            log("connected to [\(cleanIP)]:\(DB_DEFAULT_VIDEO_PORT)")
+        } else {
+            // ── IPv4 path ──────────────────────────────────────────────────
+            var addr = sockaddr_in()
+            addr.sin_family = sa_family_t(AF_INET)
+            addr.sin_port = DB_DEFAULT_VIDEO_PORT.bigEndian
+            guard inet_pton(AF_INET, cleanIP, &addr.sin_addr) == 1 else {
+                log("ERROR: invalid IP address '\(cleanIP)'")
+                srt_close(s)
+                return false
+            }
+            result = withUnsafePointer(to: &addr) { addrPtr in
+                addrPtr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
+                    srt_connect(s, sa, Int32(MemoryLayout<sockaddr_in>.size))
+                }
+            }
+            guard result != SRT_ERROR else {
+                log("connect to \(cleanIP):\(DB_DEFAULT_VIDEO_PORT) failed: \(srtError())")
+                srt_close(s)
+                return false
+            }
+            sock = s
+            log("connected to \(cleanIP):\(DB_DEFAULT_VIDEO_PORT)")
         }
 
-        sock = s
-        log("connected to \(ip):\(DB_DEFAULT_VIDEO_PORT)")
         return true
     }
 

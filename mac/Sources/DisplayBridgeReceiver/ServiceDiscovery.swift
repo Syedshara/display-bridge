@@ -205,8 +205,12 @@ final class ServiceDiscovery {
             case .ipv4(let addr):
                 hostStr = "\(addr)"
             case .ipv6(let addr):
-                // Prefer IPv4 — skip IPv6 link-local
-                let s = "\(addr)"
+                var s = "\(addr)"
+                // Strip zone ID suffix (e.g. "2401:...%en0" → "2401:...")
+                if let pct = s.firstIndex(of: "%") {
+                    s = String(s[s.startIndex..<pct])
+                }
+                // Skip link-local (fe80::) — not routable across subnets
                 if s.hasPrefix("fe80") { return }
                 hostStr = s
             case .name(let name, _):

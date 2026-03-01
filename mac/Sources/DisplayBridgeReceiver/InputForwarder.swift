@@ -22,7 +22,8 @@ final class InputForwarder {
 
     private weak var view: NSView?
     private var udpSocket: Int32 = -1
-    private var destAddr = sockaddr_in()
+    private var destStorage = sockaddr_storage()  // holds IPv4 or IPv6
+    private var destAddrLen: socklen_t = 0
     private var monitor: Any?
     private var seq: UInt16 = 0
     private let startTime = CFAbsoluteTimeGetCurrent()
@@ -53,25 +54,80 @@ final class InputForwarder {
     // MARK: - UDP Setup
 
     private func setupUDP() {
-        udpSocket = socket(AF_INET, SOCK_DGRAM, 0)
+        fillDestAddr(ip: targetHost, port: DB_DEFAULT_INPUT_PORT)
+        let family = destAddrLen == socklen_t(MemoryLayout<sockaddr_in6>.size)
+                     ? AF_INET6 : AF_INET
+        udpSocket = socket(family, SOCK_DGRAM, 0)
         guard udpSocket >= 0 else {
             log("ERROR: failed to create UDP socket: \(String(cString: strerror(errno)))")
             return
         }
-
-        destAddr.sin_family = sa_family_t(AF_INET)
-        destAddr.sin_port = DB_DEFAULT_INPUT_PORT.bigEndian
-        inet_pton(AF_INET, targetHost, &destAddr.sin_addr)
-
         log("UDP socket ready -> \(targetHost):\(DB_DEFAULT_INPUT_PORT)")
     }
 
     /// Update the destination address when targetHost changes at runtime.
     private func updateDestAddr() {
-        destAddr.sin_family = sa_family_t(AF_INET)
-        destAddr.sin_port = DB_DEFAULT_INPUT_PORT.bigEndian
-        inet_pton(AF_INET, targetHost, &destAddr.sin_addr)
+        // Close and recreate if the IP version may have changed.
+        if udpSocket >= 0 {
+            close(udpSocket)
+            udpSocket = -1
+        }
+        fillDestAddr(ip: targetHost, port: DB_DEFAULT_INPUT_PORT)
+        let family = destAddrLen == socklen_t(MemoryLayout<sockaddr_in6>.size)
+                     ? AF_INET6 : AF_INET
+        udpSocket = socket(family, SOCK_DGRAM, 0)
+        guard udpSocket >= 0 else {
+            log("ERROR: failed to recreate UDP socket: \(String(cString: strerror(errno)))")
+            return
+        }
         log("destination updated -> \(targetHost):\(DB_DEFAULT_INPUT_PORT)")
+    }
+
+    /// Fill destStorage with the correct sockaddr for the given IP and port.
+    /// Strips IPv6 zone IDs (e.g. "2401:...%en0" → "2401:...") automatically.
+    private func fillDestAddr(ip: String, port: UInt16) {
+        let cleanIP: String
+        if let pct = ip.firstIndex(of: "%") {
+            cleanIP = String(ip[ip.startIndex..<pct])
+        } else {
+            cleanIP = ip
+        }
+
+        destStorage = sockaddr_storage()
+
+        if cleanIP.contains(":") {
+            // IPv6
+            var addr = sockaddr_in6()
+            addr.sin6_family = sa_family_t(AF_INET6)
+            addr.sin6_port = port.bigEndian
+            guard inet_pton(AF_INET6, cleanIP, &addr.sin6_addr) == 1 else {
+                log("ERROR: invalid IPv6 address '\(cleanIP)'")
+                destAddrLen = 0
+                return
+            }
+            withUnsafeBytes(of: addr) { src in
+                withUnsafeMutableBytes(of: &destStorage) { dst in
+                    dst.copyBytes(from: src)
+                }
+            }
+            destAddrLen = socklen_t(MemoryLayout<sockaddr_in6>.size)
+        } else {
+            // IPv4
+            var addr = sockaddr_in()
+            addr.sin_family = sa_family_t(AF_INET)
+            addr.sin_port = port.bigEndian
+            guard inet_pton(AF_INET, cleanIP, &addr.sin_addr) == 1 else {
+                log("ERROR: invalid IPv4 address '\(cleanIP)'")
+                destAddrLen = 0
+                return
+            }
+            withUnsafeBytes(of: addr) { src in
+                withUnsafeMutableBytes(of: &destStorage) { dst in
+                    dst.copyBytes(from: src)
+                }
+            }
+            destAddrLen = socklen_t(MemoryLayout<sockaddr_in>.size)
+        }
     }
 
     // MARK: - Event Monitoring
@@ -205,7 +261,7 @@ final class InputForwarder {
     // MARK: - Send
 
     private func send(eventType: UInt8, x: Int16, y: Int16, value: Int16) {
-        guard udpSocket >= 0 else { return }
+        guard udpSocket >= 0, destAddrLen > 0 else { return }
 
         let now = UInt32((CFAbsoluteTimeGetCurrent() - startTime) * 1_000_000)
         let inputEvt = DBInputEvent(eventType: eventType, x: x, y: y, value: value)
@@ -224,10 +280,10 @@ final class InputForwarder {
         packet.append(inputData)
 
         packet.withUnsafeBytes { rawBuf in
-            withUnsafePointer(to: &destAddr) { addrPtr in
+            withUnsafePointer(to: &destStorage) { addrPtr in
                 addrPtr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
                     _ = sendto(udpSocket, rawBuf.baseAddress, rawBuf.count,
-                               0, sa, socklen_t(MemoryLayout<sockaddr_in>.size))
+                               0, sa, destAddrLen)
                 }
             }
         }
