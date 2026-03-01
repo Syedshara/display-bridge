@@ -1,0 +1,28 @@
+# Build outputs
+ubuntu/build/
+mac/.build/
+mac/.swiftpm/
+
+# Compiled kernel module objects (machine-specific)
+ubuntu/vkms-patched/*.o
+ubuntu/vkms-patched/*.ko
+ubuntu/vkms-patched/*.ko.zst
+ubuntu/vkms-patched/*.mod
+ubuntu/vkms-patched/*.mod.c
+ubuntu/vkms-patched/*.mod.o
+ubuntu/vkms-patched/.*.cmd
+ubuntu/vkms-patched/Module.symvers
+ubuntu/vkms-patched/modules.order
+
+# IDE caches
+ubuntu/.cache/
+.vscode/
+
+# Editor / OS
+.DS_Store
+*.swp
+*.swo
+*~
+
+# Secrets / tokens
+.config/display-bridge/portal_token

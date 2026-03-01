@@ -1,0 +1,241 @@
+/*
+ * ServiceDiscovery.swift
+ * Bonjour/mDNS service discovery for finding the Ubuntu sender.
+ *
+ * Uses NWBrowser (Network framework) to browse for "_display-bridge._tcp"
+ * services on the local network. When a service is found, resolves the
+ * endpoint to an IP address and notifies the delegate.
+ *
+ * Falls back to the hardcoded IP in SRTReceiver if no service is found
+ * within the timeout period.
+ *
+ * Requires macOS 13+ (Network framework NWBrowser API).
+ */
+
+import Foundation
+import Network
+
+// MARK: - Delegate
+
+protocol ServiceDiscoveryDelegate: AnyObject {
+    func serviceDiscovery(_ discovery: ServiceDiscovery,
+                          didFindSender host: String, port: UInt16)
+    func serviceDiscoveryDidFail(_ discovery: ServiceDiscovery)
+}
+
+// MARK: - ServiceDiscovery
+
+final class ServiceDiscovery {
+
+    static let serviceType = "_display-bridge._tcp"
+    static let discoveryTimeout: TimeInterval = 10.0
+
+    weak var delegate: ServiceDiscoveryDelegate?
+
+    private var browser: NWBrowser?
+    private var connection: NWConnection?
+    private let queue = DispatchQueue(label: "com.display-bridge.discovery")
+    private var resolved = false
+    private var timeoutWork: DispatchWorkItem?
+
+    // MARK: - Public API
+
+    /// Start browsing for display-bridge senders on the local network.
+    func startBrowsing() {
+        guard browser == nil else { return }
+        resolved = false
+
+        log("Browsing for \(ServiceDiscovery.serviceType) services...")
+
+        let params = NWParameters()
+        params.includePeerToPeer = true
+
+        let descriptor = NWBrowser.Descriptor.bonjour(
+            type: ServiceDiscovery.serviceType,
+            domain: "local."
+        )
+
+        let b = NWBrowser(for: descriptor, using: params)
+        b.stateUpdateHandler = { [weak self] state in
+            self?.handleBrowserState(state)
+        }
+        b.browseResultsChangedHandler = { [weak self] results, changes in
+            self?.handleBrowseResults(results, changes: changes)
+        }
+        browser = b
+        b.start(queue: queue)
+
+        // Set a timeout — fall back to hardcoded IP if no service found
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self, !self.resolved else { return }
+            self.log("Discovery timed out after \(ServiceDiscovery.discoveryTimeout)s")
+            self.stopBrowsing()
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                self.delegate?.serviceDiscoveryDidFail(self)
+            }
+        }
+        timeoutWork = work
+        queue.asyncAfter(deadline: .now() + ServiceDiscovery.discoveryTimeout,
+                         execute: work)
+    }
+
+    /// Stop browsing.
+    func stopBrowsing() {
+        timeoutWork?.cancel()
+        timeoutWork = nil
+        browser?.cancel()
+        browser = nil
+        connection?.cancel()
+        connection = nil
+    }
+
+    // MARK: - Browser State
+
+    private func handleBrowserState(_ state: NWBrowser.State) {
+        switch state {
+        case .ready:
+            log("Browser ready")
+        case .failed(let error):
+            log("Browser failed: \(error)")
+            stopBrowsing()
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                self.delegate?.serviceDiscoveryDidFail(self)
+            }
+        case .cancelled:
+            log("Browser cancelled")
+        default:
+            break
+        }
+    }
+
+    // MARK: - Browse Results
+
+    private func handleBrowseResults(_ results: Set<NWBrowser.Result>,
+                                      changes: Set<NWBrowser.Result.Change>) {
+        guard !resolved else { return }
+
+        for change in changes {
+            switch change {
+            case .added(let result):
+                log("Found service: \(result.endpoint)")
+                resolveEndpoint(result.endpoint)
+                return  // resolve the first one found
+            case .removed(let result):
+                log("Service removed: \(result.endpoint)")
+            default:
+                break
+            }
+        }
+    }
+
+    // MARK: - Endpoint Resolution
+
+    /// Resolve a Bonjour endpoint to an IP address by establishing
+    /// a lightweight NWConnection.
+    private func resolveEndpoint(_ endpoint: NWEndpoint) {
+        guard !resolved else { return }
+
+        // Create a UDP connection to resolve the endpoint to an IP
+        let conn = NWConnection(to: endpoint, using: .udp)
+        connection = conn
+
+        conn.stateUpdateHandler = { [weak self] state in
+            guard let self = self, !self.resolved else { return }
+
+            switch state {
+            case .ready:
+                // Extract the resolved IP from the current path
+                if let path = conn.currentPath,
+                   let remoteEndpoint = path.remoteEndpoint {
+                    self.extractAddress(from: remoteEndpoint)
+                } else {
+                    self.log("Connection ready but no remote endpoint")
+                }
+                conn.cancel()
+
+            case .failed(let error):
+                self.log("Resolution failed: \(error)")
+                conn.cancel()
+
+            default:
+                break
+            }
+        }
+
+        conn.start(queue: queue)
+
+        // Also try to extract from the endpoint directly if it's a hostPort
+        if case .hostPort(let host, let port) = endpoint {
+            let hostStr: String
+            switch host {
+            case .ipv4(let addr):
+                hostStr = "\(addr)"
+            case .ipv6(let addr):
+                hostStr = "\(addr)"
+            case .name(let name, _):
+                hostStr = name
+            @unknown default:
+                return
+            }
+            log("Resolved endpoint: \(hostStr):\(port.rawValue)")
+            // For .name, we still need NWConnection to resolve to IP
+            // For .ipv4/.ipv6, we can use it directly
+            if case .ipv4 = host {
+                resolved = true
+                timeoutWork?.cancel()
+                stopBrowsingKeepResult()
+                DispatchQueue.main.async { [weak self] in
+                    guard let self = self else { return }
+                    self.delegate?.serviceDiscovery(self,
+                                                    didFindSender: hostStr,
+                                                    port: port.rawValue)
+                }
+            }
+        }
+    }
+
+    private func extractAddress(from endpoint: NWEndpoint) {
+        guard !resolved else { return }
+
+        if case .hostPort(let host, let port) = endpoint {
+            let hostStr: String
+            switch host {
+            case .ipv4(let addr):
+                hostStr = "\(addr)"
+            case .ipv6(let addr):
+                // Prefer IPv4 — skip IPv6 link-local
+                let s = "\(addr)"
+                if s.hasPrefix("fe80") { return }
+                hostStr = s
+            case .name(let name, _):
+                hostStr = name
+            @unknown default:
+                return
+            }
+
+            resolved = true
+            timeoutWork?.cancel()
+            log("Resolved sender: \(hostStr):\(port.rawValue)")
+
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                self.delegate?.serviceDiscovery(self,
+                                                didFindSender: hostStr,
+                                                port: port.rawValue)
+            }
+        }
+    }
+
+    private func stopBrowsingKeepResult() {
+        browser?.cancel()
+        browser = nil
+    }
+
+    // MARK: - Logging
+
+    private func log(_ msg: String) {
+        print("[discovery] \(msg)")
+    }
+}

@@ -1,0 +1,5 @@
+module CSRT [system] {
+    header "srt_shim.h"
+    link "srt"
+    export *
+}
