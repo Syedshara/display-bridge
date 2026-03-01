@@ -11,7 +11,7 @@ import Foundation
 let DB_DEFAULT_VIDEO_PORT: UInt16   = 5000
 let DB_DEFAULT_INPUT_PORT: UInt16   = 5001
 let DB_DEFAULT_CONTROL_PORT: UInt16 = 5002
-let DB_SRT_LATENCY_MS: Int32       = 200
+let DB_SRT_LATENCY_MS: Int32       = 500
 
 // MARK: - Video Config
 

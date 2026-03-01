@@ -138,6 +138,21 @@ static ring_entry_t *ring_pop(ring_buffer_t *rb, int timeout_ms)
     return e;
 }
 
+/* Discard all queued frames. Called from main thread before streaming
+ * to a new receiver so stale high-bitrate frames don't flood SRT. */
+static void ring_flush(ring_buffer_t *rb)
+{
+    pthread_mutex_lock(&rb->mutex);
+    int dropped = 0;
+    while (rb->head != rb->tail) {
+        rb->tail = (rb->tail + 1) % RING_SIZE;
+        dropped++;
+    }
+    pthread_mutex_unlock(&rb->mutex);
+    if (dropped > 0)
+        LOG_INF("Ring buffer flushed (%d stale frames discarded)", dropped);
+}
+
 /* ===== Global state ===== */
 
 static volatile int g_running = 1;
@@ -284,10 +299,11 @@ int main(int argc, char *argv[])
     /* Initialize ring buffer */
     ring_init(&g_ring);
 
-    /* --- Step 1: Initialize encoder --- */
+    /* --- Step 1: Initialize encoder (start at conservative bitrate) --- */
+    int initial_bitrate = 15000;  /* kbps — will adapt based on network */
     LOG_INF("Initializing VAAPI encoder...");
     if (db_encoder_init(&g_encoder, DB_TARGET_WIDTH, DB_TARGET_HEIGHT,
-                        DB_BITRATE_KBPS, DB_TARGET_FPS,
+                        initial_bitrate, DB_TARGET_FPS,
                         DB_CODEC_HEVC) != 0) {
         LOG_ERR("Failed to initialize encoder");
         return 1;
@@ -358,14 +374,20 @@ int main(int argc, char *argv[])
             break;
         }
 
+        /* Flush stale frames that were encoded before connection (possibly
+         * at a different bitrate) to avoid flooding the SRT send buffer. */
+        ring_flush(&g_ring);
+
+        /* Reset to conservative bitrate and force IDR for new connection */
+        int current_bitrate = 15000;
+        db_encoder_set_bitrate(&g_encoder, current_bitrate);
+
         /* Force IDR on new connection so receiver can start decoding */
         db_encoder_force_idr(&g_encoder);
-        LOG_INF("Receiver connected — streaming");
+        LOG_INF("Receiver connected — streaming at %d kbps", current_bitrate);
 
         uint64_t last_send_time = get_time_us();
         uint64_t last_stats_time = get_time_us();
-        int current_bitrate = 15000;
-        db_encoder_set_bitrate(&g_encoder, current_bitrate);
         int prev_loss = 0;
 
         /* Stream loop — drain ring buffer and send to receiver */
@@ -377,8 +399,12 @@ int main(int argc, char *argv[])
                                            entry->size, entry->pts,
                                            entry->is_keyframe);
                 if (ret != 0) {
-                    LOG_ERR("Send failed, receiver may have disconnected");
-                    break;
+                    if (!db_streamer_is_connected(g_streamer)) {
+                        LOG_ERR("Send failed — receiver disconnected");
+                        break;
+                    }
+                    /* Transient failure (buffer full / timeout) — drop frame */
+                    LOG_WRN("Send timeout (frame dropped), continuing...");
                 }
                 last_send_time = get_time_us();
             } else {
@@ -413,10 +439,10 @@ int main(int argc, char *argv[])
                         LOG_WRN("Congestion detected (loss=%d, rtt=%.1fms) -> %d kbps",
                                 loss_delta, stats.rtt_ms, target);
                     } else if (loss_delta == 0 && stats.rtt_ms < 20.0 &&
-                               current_bitrate < DB_BITRATE_KBPS) {
-                        /* Network healthy — ramp up by 10%, max DB_BITRATE_KBPS */
+                               current_bitrate < 10000) {
+                        /* Network healthy — ramp up by 15%, max 10 Mbps */
                         target = current_bitrate * 115 / 100;
-                        if (target > DB_BITRATE_KBPS) target = DB_BITRATE_KBPS;
+                        if (target > 10000) target = 10000;
                     }
 
                     if (target != current_bitrate) {

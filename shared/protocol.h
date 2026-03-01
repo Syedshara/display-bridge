@@ -13,7 +13,7 @@
 #define DB_DEFAULT_VIDEO_PORT   5000
 #define DB_DEFAULT_INPUT_PORT   5001
 #define DB_DEFAULT_CONTROL_PORT 5002
-#define DB_SRT_LATENCY_MS       200   /* SRT latency in ms (match Mac receiver) */
+#define DB_SRT_LATENCY_MS       500   /* SRT latency in ms (match Mac receiver) */
 
 /* ===== Video Config ===== */
 #define DB_TARGET_WIDTH         2880  /* MacBook Pro 15" 2019 native (receiver display) */
