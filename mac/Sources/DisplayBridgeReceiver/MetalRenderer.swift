@@ -254,16 +254,17 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         return out;
     }
 
-    // BT.709 video-range NV12 → RGB conversion.
+    // BT.601 video-range NV12 → RGB conversion.
+    // Matches Ubuntu encode_bgrx() which uses BT.601 limited-range coefficients.
     //
     // Y  in [16, 235]  → normalized [16/255, 235/255]
     // Cb in [16, 240]  → normalized [16/255, 240/255]
     // Cr in [16, 240]  → normalized [16/255, 240/255]
     //
-    // BT.709 coefficients (Kr=0.2126, Kb=0.0722):
-    //   R = Y' + 1.5748 * Cr'
-    //   G = Y' - 0.1873 * Cb' - 0.4681 * Cr'
-    //   B = Y' + 1.8556 * Cb'
+    // BT.601 coefficients (Kr=0.299, Kb=0.114):
+    //   R = Y' + 1.402    * Cr'
+    //   G = Y' - 0.344136 * Cb' - 0.714136 * Cr'
+    //   B = Y' + 1.772    * Cb'
     fragment float4 fragmentShader(VertexOut in [[stage_in]],
                                    texture2d<float> yTexture  [[texture(0)]],
                                    texture2d<float> uvTexture [[texture(1)]]) {
@@ -278,10 +279,10 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         cb = (cb - 128.0 / 255.0) * (255.0 / 224.0);
         cr = (cr - 128.0 / 255.0) * (255.0 / 224.0);
 
-        // BT.709
-        float r = y + 1.5748 * cr;
-        float g = y - 0.1873 * cb - 0.4681 * cr;
-        float b = y + 1.8556 * cb;
+        // BT.601
+        float r = y + 1.402    * cr;
+        float g = y - 0.344136 * cb - 0.714136 * cr;
+        float b = y + 1.772    * cb;
 
         return float4(saturate(r), saturate(g), saturate(b), 1.0);
     }

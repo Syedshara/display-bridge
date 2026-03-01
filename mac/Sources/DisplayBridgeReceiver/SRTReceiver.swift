@@ -222,8 +222,9 @@ final class SRTReceiver {
             }
 
             let totalSize = Int(recvd)
-            let minSize = DBPacketHeader.size + DBVideoHeader.size
-            guard totalSize >= minSize else {
+
+            // First: require only a packet header (16 bytes minimum)
+            guard totalSize >= DBPacketHeader.size else {
                 log("WARNING: undersized message (\(totalSize) bytes)")
                 continue
             }
@@ -237,6 +238,11 @@ final class SRTReceiver {
 
             switch pktHeader.type {
             case DB_PKT_VIDEO_FRAME:
+                // Video frames additionally require a video header
+                guard totalSize >= DBPacketHeader.size + DBVideoHeader.size else {
+                    log("WARNING: undersized video frame (\(totalSize) bytes)")
+                    continue
+                }
                 let videoData = rawData.dropFirst(DBPacketHeader.size)
                 guard let vidHeader = DBVideoHeader(data: videoData) else {
                     log("WARNING: failed to parse video header")
@@ -246,7 +252,7 @@ final class SRTReceiver {
                 delegate?.srtReceiver(self, didReceiveVideoFrame: vidHeader, data: Data(hevcData))
 
             case DB_PKT_HEARTBEAT:
-                break  // ignore heartbeats
+                break  // 16-byte header only — no body expected, silently ignore
 
             default:
                 log("WARNING: unknown packet type 0x\(String(pktHeader.type, radix: 16))")
