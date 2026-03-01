@@ -24,6 +24,7 @@
  */
 
 import AppKit
+import CoreMedia
 import MetalKit
 
 final class ViewController: NSViewController {
@@ -42,7 +43,7 @@ final class ViewController: NSViewController {
     // MARK: - View Lifecycle
 
     override func loadView() {
-        guard let renderer = MetalRenderer() else {
+        guard let renderer = MetalRenderer.make() else {
             fatalError("[vc] failed to initialize MetalRenderer -- no Metal device?")
         }
         metalRenderer = renderer

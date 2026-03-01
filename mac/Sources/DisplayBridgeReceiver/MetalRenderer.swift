@@ -34,20 +34,21 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     private var textureCache: CVMetalTextureCache?
     private var currentPixelBuffer: CVPixelBuffer?
 
-    // MARK: - Init
+    // MARK: - Factory
 
-    init?() {
+    /// Create a MetalRenderer, or return nil if the GPU or shader setup fails.
+    /// Use this instead of init() — NSObject's non-failable init() cannot be
+    /// overridden with a failable init?() on macOS 26+ SDKs.
+    static func make() -> MetalRenderer? {
         guard let device = MTLCreateSystemDefaultDevice() else {
             print("[renderer] ERROR: no Metal device")
             return nil
         }
-        self.device = device
 
         guard let cq = device.makeCommandQueue() else {
             print("[renderer] ERROR: failed to create command queue")
             return nil
         }
-        self.commandQueue = cq
 
         // Create texture cache for zero-copy CVPixelBuffer → MTLTexture
         var cache: CVMetalTextureCache?
@@ -58,7 +59,6 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             print("[renderer] ERROR: CVMetalTextureCacheCreate failed (\(cacheStatus))")
             return nil
         }
-        self.textureCache = tc
 
         // Create MTKView
         let mtkView = VideoView(frame: .zero, device: device)
@@ -67,7 +67,6 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         mtkView.isPaused = true
         mtkView.enableSetNeedsDisplay = true
         mtkView.clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
-        self.view = mtkView
 
         // Compile Metal shaders
         let library: MTLLibrary
@@ -89,15 +88,37 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         pipelineDesc.fragmentFunction = fragmentFunc
         pipelineDesc.colorAttachments[0].pixelFormat = .bgra8Unorm
 
+        let pipelineState: MTLRenderPipelineState
         do {
-            self.pipelineState = try device.makeRenderPipelineState(descriptor: pipelineDesc)
+            pipelineState = try device.makeRenderPipelineState(descriptor: pipelineDesc)
         } catch {
             print("[renderer] ERROR: pipeline state creation failed: \(error)")
             return nil
         }
 
+        return MetalRenderer(
+            device: device,
+            commandQueue: cq,
+            textureCache: tc,
+            view: mtkView,
+            pipelineState: pipelineState
+        )
+    }
+
+    // MARK: - Designated Init (private — use make())
+
+    private init(device: MTLDevice,
+                 commandQueue: MTLCommandQueue,
+                 textureCache: CVMetalTextureCache,
+                 view: VideoView,
+                 pipelineState: MTLRenderPipelineState) {
+        self.device = device
+        self.commandQueue = commandQueue
+        self.textureCache = textureCache
+        self.view = view
+        self.pipelineState = pipelineState
         super.init()
-        mtkView.delegate = self
+        view.delegate = self
         print("[renderer] initialized (device: \(device.name))")
     }
 

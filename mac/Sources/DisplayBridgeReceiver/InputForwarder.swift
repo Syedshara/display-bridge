@@ -211,7 +211,7 @@ final class InputForwarder {
         let inputEvt = DBInputEvent(eventType: eventType, x: x, y: y, value: value)
         let inputData = inputEvt.serialize()
 
-        var pkt = DBPacketHeader(
+        let pkt = DBPacketHeader(
             type: DB_PKT_INPUT_EVENT,
             flags: 0,
             seq: seq,
