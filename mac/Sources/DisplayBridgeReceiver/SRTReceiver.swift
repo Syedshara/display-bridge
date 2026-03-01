@@ -41,7 +41,12 @@ final class SRTReceiver {
 
     private let queue = DispatchQueue(label: "com.display-bridge.srt-recv",
                                       qos: .userInteractive)
-    private var sock: SRTSOCKET = SRT_INVALID_SOCK
+    private let sockLock = NSLock()
+    private var _sock: SRTSOCKET = SRT_INVALID_SOCK
+    private var sock: SRTSOCKET {
+        get { sockLock.lock(); defer { sockLock.unlock() }; return _sock }
+        set { sockLock.lock(); defer { sockLock.unlock() }; _sock = newValue }
+    }
     private var running = false
     private let maxBufSize = 8 * 1024 * 1024  // 8 MB — well above any single frame
 
@@ -49,7 +54,11 @@ final class SRTReceiver {
 
     init() {
         srt_startup()
-        log("SRT library started (version \(String(cString: srt_getversion_str())))")
+        let ver = srt_getversion()
+        let major = (ver >> 16) & 0xff
+        let minor = (ver >> 8) & 0xff
+        let patch = ver & 0xff
+        log("SRT library started (version \(major).\(minor).\(patch))")
     }
 
     deinit {

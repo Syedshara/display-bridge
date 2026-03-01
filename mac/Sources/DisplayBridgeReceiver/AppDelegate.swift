@@ -45,9 +45,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         win.titleVisibility = .hidden
         win.backgroundColor = .black
 
-        // Show window
+        // Show window — makeFirstResponder deferred to viewDidAppear (view not loaded yet here)
         win.makeKeyAndOrderFront(nil)
-        win.makeFirstResponder(vc.metalRenderer?.view)
 
         self.window = win
 
