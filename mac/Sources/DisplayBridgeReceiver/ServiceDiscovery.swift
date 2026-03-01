@@ -138,8 +138,15 @@ final class ServiceDiscovery {
     private func resolveEndpoint(_ endpoint: NWEndpoint) {
         guard !resolved else { return }
 
-        // Create a UDP connection to resolve the endpoint to an IP
-        let conn = NWConnection(to: endpoint, using: .udp)
+        // Create a UDP connection to resolve the endpoint to an IP.
+        // Force IPv4 (A record) so we never get an IPv6 address that may be
+        // blocked by WiFi client isolation.
+        let params = NWParameters.udp
+        if let ipOptions = params.defaultProtocolStack.internetProtocol
+                            as? NWProtocolIP.Options {
+            ipOptions.version = .v4
+        }
+        let conn = NWConnection(to: endpoint, using: params)
         connection = conn
 
         conn.stateUpdateHandler = { [weak self] state in
@@ -172,7 +179,7 @@ final class ServiceDiscovery {
             // For .ipv4/.ipv6, use inet_ntop for a clean string (no zone ID)
             switch host {
             case .ipv4(let addr):
-                var raw = addr.rawValue
+                let raw = addr.rawValue
                 var buf = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
                 guard raw.withUnsafeBytes({ ptr in
                     inet_ntop(AF_INET, ptr.baseAddress, &buf, socklen_t(INET_ADDRSTRLEN))
@@ -203,7 +210,7 @@ final class ServiceDiscovery {
             switch host {
             case .ipv4(let addr):
                 // Use inet_ntop on raw bytes to get a clean string
-                var raw = addr.rawValue  // 4 bytes
+                let raw = addr.rawValue  // 4 bytes
                 var buf = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
                 guard raw.withUnsafeBytes({ ptr in
                     inet_ntop(AF_INET, ptr.baseAddress, &buf, socklen_t(INET_ADDRSTRLEN))
@@ -211,7 +218,7 @@ final class ServiceDiscovery {
                 hostStr = String(cString: buf)
             case .ipv6(let addr):
                 // Use inet_ntop on raw bytes — avoids zone ID in string description
-                var raw = addr.rawValue  // 16 bytes
+                let raw = addr.rawValue  // 16 bytes
                 var buf = [CChar](repeating: 0, count: Int(INET6_ADDRSTRLEN))
                 guard raw.withUnsafeBytes({ ptr in
                     inet_ntop(AF_INET6, ptr.baseAddress, &buf, socklen_t(INET6_ADDRSTRLEN))

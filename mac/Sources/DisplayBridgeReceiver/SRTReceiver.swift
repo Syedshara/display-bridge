@@ -43,6 +43,9 @@ final class SRTReceiver {
                                       qos: .userInteractive)
     private let sockLock = NSLock()
     private var _sock: SRTSOCKET = SRT_INVALID_SOCK
+    /// Counts consecutive connect() failures on the current targetHost.
+    /// After 3 failures on a non-default host (IPv6), we override to DEFAULT_UBUNTU_IP.
+    private var consecutiveFailures = 0
     private var sock: SRTSOCKET {
         get { sockLock.lock(); defer { sockLock.unlock() }; return _sock }
         set { sockLock.lock(); defer { sockLock.unlock() }; _sock = newValue }
@@ -140,9 +143,11 @@ final class SRTReceiver {
             guard result != SRT_ERROR else {
                 log("connect to [\(cleanIP)]:\(DB_DEFAULT_VIDEO_PORT) failed: \(srtError())")
                 srt_close(s)
+                checkFallback()
                 return false
             }
             sock = s
+            consecutiveFailures = 0
             log("connected to [\(cleanIP)]:\(DB_DEFAULT_VIDEO_PORT)")
         } else {
             // ── IPv4 path ──────────────────────────────────────────────────
@@ -162,9 +167,11 @@ final class SRTReceiver {
             guard result != SRT_ERROR else {
                 log("connect to \(cleanIP):\(DB_DEFAULT_VIDEO_PORT) failed: \(srtError())")
                 srt_close(s)
+                checkFallback()
                 return false
             }
             sock = s
+            consecutiveFailures = 0
             log("connected to \(cleanIP):\(DB_DEFAULT_VIDEO_PORT)")
         }
 
@@ -255,6 +262,19 @@ final class SRTReceiver {
     }
 
     // MARK: - Helpers
+
+    /// Called after each connect() failure. After 3 consecutive failures on a
+    /// non-default (IPv6) host, overrides targetHost with DEFAULT_UBUNTU_IP so
+    /// the next attempt uses IPv4 directly.
+    private func checkFallback() {
+        consecutiveFailures += 1
+        if consecutiveFailures >= 3 && targetHost != Self.DEFAULT_UBUNTU_IP {
+            log("IPv6 unreachable after \(consecutiveFailures) tries — " +
+                "falling back to IPv4 \(Self.DEFAULT_UBUNTU_IP)")
+            targetHost = Self.DEFAULT_UBUNTU_IP
+            consecutiveFailures = 0
+        }
+    }
 
     private func srtError() -> String {
         return String(cString: srt_getlasterror_str())
