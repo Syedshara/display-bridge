@@ -212,7 +212,7 @@ static void handle_input_event(db_input_t *inp, const db_input_event_t *evt)
 
 static int setup_udp_listener(int port)
 {
-    int sock = socket(AF_INET, SOCK_DGRAM, 0);
+    int sock = socket(AF_INET6, SOCK_DGRAM, 0);
     if (sock < 0) {
         LOG_ERR("socket() failed: %s", strerror(errno));
         return -1;
@@ -222,17 +222,21 @@ static int setup_udp_listener(int port)
     int yes = 1;
     setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
 
+    /* Dual-stack: accept both IPv4 and IPv6 senders */
+    int no = 0;
+    setsockopt(sock, IPPROTO_IPV6, IPV6_V6ONLY, &no, sizeof(no));
+
     /* Set receive timeout for clean shutdown */
     struct timeval tv;
     tv.tv_sec = 1;
     tv.tv_usec = 0;
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
-    struct sockaddr_in addr;
+    struct sockaddr_in6 addr;
     memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons((uint16_t)port);
-    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin6_family = AF_INET6;
+    addr.sin6_port   = htons((uint16_t)port);
+    addr.sin6_addr   = in6addr_any;
 
     if (bind(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         LOG_ERR("bind() port %d failed: %s", port, strerror(errno));

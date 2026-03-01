@@ -113,12 +113,17 @@ db_streamer_t *db_streamer_init(int listen_port, int latency_ms)
     int msgapi = 1;
     srt_setsockflag(s->listen_sock, SRTO_MESSAGEAPI, &msgapi, sizeof(msgapi));
 
-    /* Bind to all interfaces */
-    struct sockaddr_in addr;
+    /* Dual-stack: accept both IPv4 and IPv6 callers.
+     * SRTO_IPV6ONLY=0 must be set before srt_bind. */
+    int ipv6only = 0;
+    srt_setsockflag(s->listen_sock, SRTO_IPV6ONLY, &ipv6only, sizeof(ipv6only));
+
+    /* Bind to all interfaces (IPv4 + IPv6) */
+    struct sockaddr_in6 addr;
     memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons((uint16_t)listen_port);
-    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin6_family = AF_INET6;
+    addr.sin6_port   = htons((uint16_t)listen_port);
+    addr.sin6_addr   = in6addr_any;
 
     if (srt_bind(s->listen_sock, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
         STRM_ERR("srt_bind failed on port %d: %s", listen_port,
@@ -182,7 +187,7 @@ int db_streamer_accept(db_streamer_t *s, int timeout_ms)
     }
 
     /* Accept the connection */
-    struct sockaddr_in client_addr;
+    struct sockaddr_storage client_addr;
     int addr_len = sizeof(client_addr);
     s->client_sock = srt_accept(s->listen_sock,
                                 (struct sockaddr *)&client_addr, &addr_len);
@@ -195,10 +200,18 @@ int db_streamer_accept(db_streamer_t *s, int timeout_ms)
     srt_setsockflag(s->client_sock, SRTO_LATENCY,
                     &s->latency_ms, sizeof(s->latency_ms));
 
-    char ip_str[INET_ADDRSTRLEN];
-    inet_ntop(AF_INET, &client_addr.sin_addr, ip_str, sizeof(ip_str));
-    STRM_INF("Receiver connected from %s:%d", ip_str,
-            ntohs(client_addr.sin_port));
+    char ip_str[INET6_ADDRSTRLEN];
+    if (client_addr.ss_family == AF_INET6) {
+        struct sockaddr_in6 *c6 = (struct sockaddr_in6 *)&client_addr;
+        inet_ntop(AF_INET6, &c6->sin6_addr, ip_str, sizeof(ip_str));
+        STRM_INF("Receiver connected from [%s]:%d", ip_str,
+                ntohs(c6->sin6_port));
+    } else {
+        struct sockaddr_in *c4 = (struct sockaddr_in *)&client_addr;
+        inet_ntop(AF_INET, &c4->sin_addr, ip_str, sizeof(ip_str));
+        STRM_INF("Receiver connected from %s:%d", ip_str,
+                ntohs(c4->sin_port));
+    }
 
     s->connected = 1;
     s->seq = 0;
