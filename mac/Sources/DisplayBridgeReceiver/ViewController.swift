@@ -101,10 +101,18 @@ final class ViewController: NSViewController {
 
     /// Configure target host and start the SRT receiver + input pipeline.
     private func startPipeline(host: String) {
-        print("[vc] target host: \(host)")
+        // Belt-and-suspenders: strip IPv6 zone ID suffix (e.g. "%en0") if present
+        let cleanHost: String
+        if let pct = host.firstIndex(of: "%") {
+            cleanHost = String(host[host.startIndex..<pct])
+        } else {
+            cleanHost = host
+        }
 
-        srtReceiver?.targetHost = host
-        inputForwarder?.targetHost = host
+        print("[vc] target host: \(cleanHost)")
+
+        srtReceiver?.targetHost = cleanHost
+        inputForwarder?.targetHost = cleanHost
 
         srtReceiver?.start()
         print("[vc] pipeline started, waiting for SRT connection...")

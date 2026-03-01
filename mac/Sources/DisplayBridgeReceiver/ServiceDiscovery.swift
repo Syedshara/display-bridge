@@ -14,6 +14,7 @@
 
 import Foundation
 import Network
+import Darwin
 
 // MARK: - Delegate
 
@@ -168,30 +169,28 @@ final class ServiceDiscovery {
 
         // Also try to extract from the endpoint directly if it's a hostPort
         if case .hostPort(let host, let port) = endpoint {
-            let hostStr: String
+            // For .ipv4/.ipv6, use inet_ntop for a clean string (no zone ID)
             switch host {
             case .ipv4(let addr):
-                hostStr = "\(addr)"
-            case .ipv6(let addr):
-                hostStr = "\(addr)"
-            case .name(let name, _):
-                hostStr = name
-            @unknown default:
-                return
-            }
-            log("Resolved endpoint: \(hostStr):\(port.rawValue)")
-            // For .name, we still need NWConnection to resolve to IP
-            // For .ipv4/.ipv6, we can use it directly
-            if case .ipv4 = host {
+                var raw = addr.rawValue
+                var buf = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+                guard raw.withUnsafeBytes({ ptr in
+                    inet_ntop(AF_INET, ptr.baseAddress, &buf, socklen_t(INET_ADDRSTRLEN))
+                }) != nil else { return }
+                let ipStr = String(cString: buf)
+                log("Resolved endpoint: \(ipStr):\(port.rawValue)")
                 resolved = true
                 timeoutWork?.cancel()
                 stopBrowsingKeepResult()
                 DispatchQueue.main.async { [weak self] in
                     guard let self = self else { return }
                     self.delegate?.serviceDiscovery(self,
-                                                    didFindSender: hostStr,
+                                                    didFindSender: ipStr,
                                                     port: port.rawValue)
                 }
+            default:
+                // For .name and .ipv6, fall through to NWConnection resolution
+                break
             }
         }
     }
@@ -203,18 +202,31 @@ final class ServiceDiscovery {
             let hostStr: String
             switch host {
             case .ipv4(let addr):
-                hostStr = "\(addr)"
+                // Use inet_ntop on raw bytes to get a clean string
+                var raw = addr.rawValue  // 4 bytes
+                var buf = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+                guard raw.withUnsafeBytes({ ptr in
+                    inet_ntop(AF_INET, ptr.baseAddress, &buf, socklen_t(INET_ADDRSTRLEN))
+                }) != nil else { return }
+                hostStr = String(cString: buf)
             case .ipv6(let addr):
-                var s = "\(addr)"
-                // Strip zone ID suffix (e.g. "2401:...%en0" → "2401:...")
-                if let pct = s.firstIndex(of: "%") {
-                    s = String(s[s.startIndex..<pct])
-                }
+                // Use inet_ntop on raw bytes — avoids zone ID in string description
+                var raw = addr.rawValue  // 16 bytes
+                var buf = [CChar](repeating: 0, count: Int(INET6_ADDRSTRLEN))
+                guard raw.withUnsafeBytes({ ptr in
+                    inet_ntop(AF_INET6, ptr.baseAddress, &buf, socklen_t(INET6_ADDRSTRLEN))
+                }) != nil else { return }
+                let s = String(cString: buf)
                 // Skip link-local (fe80::) — not routable across subnets
                 if s.hasPrefix("fe80") { return }
                 hostStr = s
             case .name(let name, _):
-                hostStr = name
+                // Strip zone ID just in case (e.g. "hostname%en0")
+                if let pct = name.firstIndex(of: "%") {
+                    hostStr = String(name[name.startIndex..<pct])
+                } else {
+                    hostStr = name
+                }
             @unknown default:
                 return
             }
