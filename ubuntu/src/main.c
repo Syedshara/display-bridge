@@ -364,7 +364,8 @@ int main(int argc, char *argv[])
 
         uint64_t last_send_time = get_time_us();
         uint64_t last_stats_time = get_time_us();
-        int current_bitrate = DB_BITRATE_KBPS;
+        int current_bitrate = 15000;
+        db_encoder_set_bitrate(&g_encoder, current_bitrate);
         int prev_loss = 0;
 
         /* Stream loop — drain ring buffer and send to receiver */
@@ -405,16 +406,16 @@ int main(int argc, char *argv[])
 
                     int target = current_bitrate;
 
-                    if (loss_delta > 10 || stats.rtt_ms > 50.0) {
-                        /* Network congestion — reduce bitrate by 20%, min 5 Mbps */
-                        target = current_bitrate * 80 / 100;
+                    if (loss_delta > 5 || stats.rtt_ms > 50.0) {
+                        /* Network congestion — reduce bitrate by 40%, min 5 Mbps */
+                        target = current_bitrate * 60 / 100;
                         if (target < 5000) target = 5000;
                         LOG_WRN("Congestion detected (loss=%d, rtt=%.1fms) -> %d kbps",
                                 loss_delta, stats.rtt_ms, target);
                     } else if (loss_delta == 0 && stats.rtt_ms < 20.0 &&
                                current_bitrate < DB_BITRATE_KBPS) {
                         /* Network healthy — ramp up by 10%, max DB_BITRATE_KBPS */
-                        target = current_bitrate * 110 / 100;
+                        target = current_bitrate * 115 / 100;
                         if (target > DB_BITRATE_KBPS) target = DB_BITRATE_KBPS;
                     }
 

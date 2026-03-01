@@ -116,7 +116,13 @@ db_streamer_t *db_streamer_init(int listen_port, int latency_ms)
     /* Dual-stack: accept both IPv4 and IPv6 callers.
      * SRTO_IPV6ONLY=0 must be set before srt_bind. */
     int ipv6only = 0;
-    srt_setsockflag(s->listen_sock, SRTO_IPV6ONLY, &ipv6only, sizeof(ipv6only));
+    /* Send buffer: accommodate 200ms of data at peak bitrate + retransmissions. */
+    int sndbuf = 16 * 1024 * 1024;
+    srt_setsockflag(s->listen_sock, SRTO_SNDBUF, &sndbuf, sizeof(sndbuf));
+
+    /* Send timeout: drop the frame rather than block the pipeline */
+    int sndtimeo = 50;
+    srt_setsockflag(s->listen_sock, SRTO_SNDTIMEO, &sndtimeo, sizeof(sndtimeo));
 
     /* Bind to all interfaces (IPv4 + IPv6) */
     struct sockaddr_in6 addr;
